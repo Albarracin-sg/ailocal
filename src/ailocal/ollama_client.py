@@ -8,14 +8,22 @@ import subprocess
 BASE_URL = "http://localhost:11434"
 DEFAULT_MODEL = "qwen2.5-coder:3b-nt"
 
-SYSTEM_PROMPT = """Eres un asistente de codigo. Cuando te pidan crear archivos, USA EL SIGUIENTE FORMATO EXACTO para cada archivo:
+SYSTEM_PROMPT = """Eres un asistente de codigo. Puedes LEER y EDITAR archivos existentes.
 
+PARA LEER un archivo existente, usa:
+[READ:ruta/del/archivo.py]
+
+PARA CREAR/REEMPLAZAR archivos, usa bloques markdown con ruta:
 ```python:ruta/del/archivo.py
 codigo aqui
 ```
 
-La ruta debe incluir el directorio si aplica, ej: inventario/main.py
-No uses tool calls ni JSON de function calling. Solo codigo markdown con rutas."""
+Para otros lenguajes usa la extensión correspondiente:
+```javascript:ruta/file.js
+```html:ruta/file.html
+```bash:ruta/script.sh
+
+No uses tool calls ni JSON de function calling. Solo las marcas [READ:] y bloques de codigo."""
 
 
 class OllamaError(Exception):
@@ -30,10 +38,35 @@ def chat(
 ) -> dict:
     """Send a chat request to ollama and return the response."""
     messages = [{"role": "system", "content": system}]
-    
-    # Si el prompt viene con stdin (varias lineas), lo enviamos completo
     messages.append({"role": "user", "content": prompt})
+    return _chat_request(messages, model, stream)
 
+
+def chat_stream(prompt: str, model: str = DEFAULT_MODEL, system: str = SYSTEM_PROMPT):
+    """Stream response from ollama, yielding tokens."""
+    messages = [{"role": "system", "content": system}, {"role": "user", "content": prompt}]
+    yield from _stream_request(messages, model)
+
+
+def chat_with_history(
+    messages: list,
+    model: str = DEFAULT_MODEL,
+    include_system: bool = True,
+):
+    """Send a full message history. Used for follow-up turns (e.g. [READ] responses)."""
+    return _chat_request(messages, model, stream=False)
+
+
+def chat_with_history_stream(
+    messages: list,
+    model: str = DEFAULT_MODEL,
+):
+    """Stream response from full message history."""
+    yield from _stream_request(messages, model)
+
+
+def _chat_request(messages: list, model: str, stream: bool = False) -> dict:
+    """Low-level chat request."""
     payload = json.dumps({
         "model": model,
         "messages": messages,
@@ -57,10 +90,8 @@ def chat(
     return data
 
 
-def chat_stream(prompt: str, model: str = DEFAULT_MODEL, system: str = SYSTEM_PROMPT):
-    """Stream response from ollama, yielding tokens."""
-    messages = [{"role": "system", "content": system}, {"role": "user", "content": prompt}]
-
+def _stream_request(messages: list, model: str):
+    """Low-level streaming request."""
     payload = json.dumps({
         "model": model,
         "messages": messages,
@@ -81,7 +112,6 @@ def chat_stream(prompt: str, model: str = DEFAULT_MODEL, system: str = SYSTEM_PR
                 if not chunk:
                     break
                 buffer += chunk
-                # Try to parse complete lines
                 while b"\n" in buffer:
                     line, buffer = buffer.split(b"\n", 1)
                     if line.strip():
@@ -96,6 +126,14 @@ def chat_stream(prompt: str, model: str = DEFAULT_MODEL, system: str = SYSTEM_PR
                             pass
     except urllib.error.URLError as e:
         raise OllamaError(f"Connection error: {e}") from e
+
+
+# Old chat functions kept for backward compat
+def _old_chat(prompt, model, system, stream):
+    return chat(prompt, model, system, stream)
+
+def _old_chat_stream(prompt, model, system):
+    return chat_stream(prompt, model, system)
 
 
 def list_models() -> list[str]:

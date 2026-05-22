@@ -8,7 +8,8 @@ import time
 import select
 from pathlib import Path
 
-from ailocal.ollama_client import chat, chat_stream, list_models, DEFAULT_MODEL, OllamaError
+import re
+from ailocal import ollama_client
 from ailocal.file_writer import extract_and_write_files, strip_code_blocks
 
 
@@ -75,7 +76,7 @@ def print_banner():
     """Show startup banner."""
     hr("━")
     cprint("  ailocal  —  local AI coding assistant", "cyan", bold=True)
-    cprint(f"  model: {DEFAULT_MODEL}", "dim")
+    cprint(f"  model: {ollama_client.DEFAULT_MODEL}", "dim")
     hr("━")
     print()
 
@@ -186,11 +187,11 @@ def interactive_loop(model: str, workdir: str, history: ChatHistory):
                 continue
             elif cmd == "/models":
                 try:
-                    models = list_models()
+                    models = ollama_client.list_models()
                     cprint("  Available models:", "cyan")
                     for m in models:
                         print(f"    • {m}")
-                except OllamaError as e:
+                except ollama_client.OllamaError as e:
                     cprint(f"  Error: {e}", "red")
                 continue
             elif cmd == "/clear":
@@ -214,61 +215,95 @@ def interactive_loop(model: str, workdir: str, history: ChatHistory):
             full_response = ""
             files_created = []
 
-            # Try streaming first (better UX)
-            try:
+            # Build message history from context
+            messages = [{"role": "system", "content": ollama_client.SYSTEM_PROMPT}]
+            for msg in history.messages:
+                messages.append(msg)
+            messages.append({"role": "user", "content": user_input})
+
+            # Chat with the model (handle [READ:path] cycles)
+            max_reads = 3  # prevent infinite loops
+            read_count = 0
+
+            while read_count <= max_reads:
+                # Send request
                 start = time.time()
-                stream = chat_stream(user_input, model=model)
-                first_token = True
-                for token in stream:
-                    if first_token:
-                        elapsed = time.time() - start
-                        # Clear the "working" line
-                        sys.stdout.write("\033[2K\r")
-                        sys.stdout.flush()
-                        first_token = False
-                    full_response += token
-                
-                # Show output without code blocks
-                clean = strip_code_blocks(full_response)
-                if clean:
-                    print()
-                    ask_model(clean)
-                    print()
+                try:
+                    stream = ollama_client.chat_with_history_stream(messages, model=model)
+                    first_token = True
+                    full_response = ""
+                    for token in stream:
+                        if first_token:
+                            elapsed = time.time() - start
+                            sys.stdout.write("\033[2K\r")
+                            sys.stdout.flush()
+                            first_token = False
+                        full_response += token
+                except Exception:
+                    resp = ollama_client.chat_with_history(messages, model=model)
+                    full_response = resp.get("message", {}).get("content", "")
+
+                # Check for [READ:path] commands
+                read_match = re.search(r'\[READ:\s*(.+?)\]', full_response)
+                if not read_match or read_count >= max_reads:
+                    break
+
+                read_path = read_match.group(1).strip()
+                abs_path = os.path.join(workdir, read_path)
+
+                # Add model response to history
+                messages.append({"role": "assistant", "content": full_response})
+
+                # Try to read the file
+                read_content = None
+                for try_path in [abs_path, read_path]:
+                    if os.path.isfile(try_path):
+                        with open(try_path) as f:
+                            read_content = f.read()
+                        break
+
+                if read_content is None:
+                    msg = f"Error: file '{read_path}' not found"
+                    cprint(f"  ⚠ {msg}", "yellow")
+                    messages.append({"role": "user", "content": msg})
                 else:
-                    # Just the code blocks, no text -> show we're processing
-                    cprint("  generating files...", "dim")
+                    cprint(f"  📖 read: {read_path}", "cyan")
+                    messages.append({
+                        "role": "user",
+                        "content": f"[FILE:{read_path}]\n```\n{read_content}\n```\n\nNow fix/edit this file as needed."
+                    })
 
-                # Extract and write files
-                files_created = extract_and_write_files(full_response, workdir=workdir)
+                read_count += 1
+                cprint("  ⏳ processing...", "yellow")
+                sys.stdout.flush()
 
-            except Exception:
-                # Fallback to non-streaming
-                resp = chat(user_input, model=model)
-                full_response = resp.get("message", {}).get("content", "")
-                
-                clean = strip_code_blocks(full_response)
-                if clean:
-                    print()
-                    ask_model(clean)
-                    print()
-                
-                files_created = extract_and_write_files(full_response, workdir=workdir)
+            # Show output without code blocks
+            clean = strip_code_blocks(full_response)
+            if clean:
+                print()
+                ask_model(clean)
+                print()
+            else:
+                cprint("  generating files...", "dim")
 
-            # Show files created
+            # Extract and write files (overwrites existing)
+            files_created = extract_and_write_files(full_response, workdir=workdir)
+
+            # Show files created/updated
             if files_created:
                 cprint("  ✓ Files created:", "green", bold=True)
                 for f in files_created:
                     print(f"    • {f}")
                 print()
 
-            # Add to history (truncated for context)
+            # Add to history
             summary = full_response[:500] if len(full_response) > 500 else full_response
             history.add("user", user_input)
             history.add("assistant", summary)
 
             hr()
 
-        except OllamaError as e:
+        except ollama_client.OllamaError as e:
             cprint(f"  Error: {e}", "red")
             cprint("  Is ollama running? Try: docker start ollama", "yellow")
             hr()
@@ -331,7 +366,7 @@ def main():
         """),
     )
     parser.add_argument("prompt", nargs="?", help="Prompt (omit for interactive)")
-    parser.add_argument("--model", "-m", default=DEFAULT_MODEL, help="Ollama model")
+    parser.add_argument("--model", "-m", default=ollama_client.DEFAULT_MODEL, help="Ollama model")
     parser.add_argument("--dir", "-d", default=".", help="Working directory")
     parser.add_argument("--list-models", "-l", action="store_true", help="List models")
 
@@ -340,11 +375,11 @@ def main():
     # Handle --list-models
     if args.list_models:
         try:
-            models = list_models()
+            models = ollama_client.list_models()
             print("Available models:")
             for m in models:
                 print(f"  • {m}")
-        except OllamaError as e:
+        except ollama_client.OllamaError as e:
             cprint(f"Error: {e}", "red")
             sys.exit(1)
         return
