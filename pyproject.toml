@@ -1,0 +1,12 @@
+[project]
+name = "ailocal"
+version = "0.1.0"
+description = "CLI tool to chat with local ollama models and create files from code"
+requires-python = ">=3.10"
+authors = [{ name = "Albarracin-sg" }]
+
+[project.scripts]
+ailocal = "ailocal.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
