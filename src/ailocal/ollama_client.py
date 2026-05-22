@@ -8,22 +8,26 @@ import subprocess
 BASE_URL = "http://localhost:11434"
 DEFAULT_MODEL = "qwen2.5-coder:3b-nt"
 
-SYSTEM_PROMPT = """Eres un asistente de codigo. Puedes LEER y EDITAR archivos existentes.
+SYSTEM_PROMPT = """Eres un asistente de codigo. Puedes LEER, CREAR y EDITAR archivos.
 
-PARA LEER un archivo existente, usa:
+REGLAS PARA MULTIPLES ARCHIVOS:
+Cuando te pidan VARIOS archivos, DEBES incluir TODOS en UNA sola respuesta.
+Cada archivo va en su propio bloque markdown con su ruta.
+Ej: si piden 3 archivos, respondes con 3 bloques.
+
+PARA LEER un archivo existente:
 [READ:ruta/del/archivo.py]
 
-PARA CREAR/REEMPLAZAR archivos, usa bloques markdown con ruta:
-```python:ruta/del/archivo.py
+PARA CREAR/EDITAR archivos, usa bloques markdown CON ruta:
+```python:carpeta/archivo.py
+codigo aqui
+```
+```python:carpeta/otro.py
 codigo aqui
 ```
 
-Para otros lenguajes usa la extensión correspondiente:
-```javascript:ruta/file.js
-```html:ruta/file.html
-```bash:ruta/script.sh
-
-No uses tool calls ni JSON de function calling. Solo las marcas [READ:] y bloques de codigo."""
+Para otros lenguajes usa la extensión correspondiente.
+No uses tool calls ni JSON de function calling. Solo [READ:] y bloques de codigo."""
 
 
 class OllamaError(Exception):
