@@ -5,6 +5,7 @@ import os
 import shutil
 import textwrap
 import time
+import select
 from pathlib import Path
 
 from ailocal.ollama_client import chat, chat_stream, list_models, DEFAULT_MODEL, OllamaError
@@ -108,6 +109,52 @@ def ask_model(output: str):
         print(f"  {line}")
 
 
+def read_input(prompt=">>> ") -> str:
+    """Read user input with multi-line paste detection.
+    
+    If text is pasted (lines arrive quickly), reads all lines as one prompt.
+    Single typed lines are processed immediately.
+    """
+    print(prompt, end="", flush=True)
+    
+    lines = []
+    paste_mode = False
+    
+    while True:
+        # Check if data is available
+        r, _, _ = select.select([sys.stdin], [], [], 0.3)
+        if r:
+            line = sys.stdin.readline()
+            if not line:
+                break
+            lines.append(line.rstrip("\r\n"))
+            # If we got data within 300ms, we're likely in paste mode
+            paste_mode = True
+        elif paste_mode:
+            # No more data after paste - finish
+            break
+        elif lines:
+            # Single line, no more data
+            break
+        else:
+            # First line not received yet, wait more
+            r, _, _ = select.select([sys.stdin], [], [], None)
+            if r:
+                line = sys.stdin.readline()
+                if not line:
+                    break
+                lines.append(line.rstrip("\r\n"))
+                # Check if more coming
+                r, _, _ = select.select([sys.stdin], [], [], 0.3)
+                if r:
+                    paste_mode = True
+                else:
+                    break
+    
+    text = "\n".join(lines).strip()
+    return text
+
+
 def interactive_loop(model: str, workdir: str, history: ChatHistory):
     """Main interactive loop."""
     print_banner()
@@ -118,7 +165,7 @@ def interactive_loop(model: str, workdir: str, history: ChatHistory):
     while True:
         # Prompt
         try:
-            user_input = input(">>> ").strip()
+            user_input = read_input(">>> ")
         except (EOFError, KeyboardInterrupt):
             print()
             break
