@@ -159,7 +159,9 @@ def interactive_loop(model: str, workdir: str, history: ChatHistory):
 
         # Normal message
         hr()
-        cprint("  sending...", "dim")
+
+        cprint("  ⏳ working... (model on CPU, may take a moment)", "yellow", bold=True)
+        sys.stdout.flush()
 
         try:
             full_response = ""
@@ -167,8 +169,16 @@ def interactive_loop(model: str, workdir: str, history: ChatHistory):
 
             # Try streaming first (better UX)
             try:
+                start = time.time()
                 stream = chat_stream(user_input, model=model)
+                first_token = True
                 for token in stream:
+                    if first_token:
+                        elapsed = time.time() - start
+                        # Clear the "working" line
+                        sys.stdout.write("\033[2K\r")
+                        sys.stdout.flush()
+                        first_token = False
                     full_response += token
                 
                 # Show output without code blocks
